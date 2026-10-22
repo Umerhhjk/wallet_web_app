@@ -1,8 +1,9 @@
 // src/workers/wallet.worker.ts
-import type { WorkerMessage, WorkerResponse, EncryptPayload, DecryptPayload, EncryptedVault } from '../types/worker';
+import type { WorkerMessage, WorkerResponse, EncryptPayload, DecryptPayload, EncryptedVault, SignTxPayload } from '../types/worker';
 import { generateMnemonic } from '@scure/bip39';
 // Added .js extension to satisfy strict module resolution
 import { wordlist } from '@scure/bip39/wordlists/english.js';
+import { Wallet } from 'ethers';
 
 // --- Cryptography Constants & Helpers ---
 const KDF_ITERATIONS = 600_000;
@@ -101,8 +102,17 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 
       case 'ENCRYPT_VAULT': {
         const { secret, password } = payload as EncryptPayload;
+        
+        // Derive the public address based on whether it is a mnemonic or private key
+        let address = '';
+        if (secret.includes(' ')) {
+          address = Wallet.fromPhrase(secret).address;
+        } else {
+          address = new Wallet(secret).address;
+        }
+
         const encryptedVault = await encryptSecret(secret, password);
-        result = { encryptedVault };
+        result = { encryptedVault, address };
         break;
       }
 
@@ -113,10 +123,23 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         break;
       }
 
-      case 'SIGN_TRANSACTION':
-        // Placeholder for Phase 6
-        result = { signedTx: '0x_signed_tx_placeholder' };
+      case 'SIGN_TRANSACTION': {
+        const { encryptedVault, password, unsignedTx } = payload as SignTxPayload;
+        
+        // 1. Decrypt the secret
+        const secret = await decryptSecret(encryptedVault, password);
+        
+        // 2. Instantiate the isolated Wallet
+        const wallet = secret.includes(' ') 
+          ? Wallet.fromPhrase(secret) 
+          : new Wallet(secret);
+        
+        // 3. Sign the transaction payload
+        const signedTx = await wallet.signTransaction(unsignedTx);
+        
+        result = { signedTx };
         break;
+      }
 
       default:
         throw new Error(`Unknown command: ${command}`);
