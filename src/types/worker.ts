@@ -4,7 +4,10 @@ export type WorkerCommand =
   | 'GENERATE_WALLET'
   | 'ENCRYPT_VAULT'
   | 'DECRYPT_VAULT'
-  | 'SIGN_TRANSACTION';
+  | 'SIGN_TRANSACTION'
+  | 'UNLOCK_WALLET'
+  | 'LOCK_WALLET'
+  | 'GET_PRIVATE_KEY';
 
 export interface WorkerMessage<T = unknown> {
   id: string;

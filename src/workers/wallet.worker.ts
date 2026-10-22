@@ -5,6 +5,17 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { Wallet } from 'ethers';
 
+// --- Session Management ---
+let activeSessionSecret: string | null = null;
+let sessionTimer: ReturnType<typeof setTimeout> | null = null;
+const SESSION_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+function clearSession() {
+  activeSessionSecret = null;
+  if (sessionTimer) clearTimeout(sessionTimer);
+  sessionTimer = null;
+}
+
 // --- Cryptography Constants & Helpers ---
 const KDF_ITERATIONS = 600_000;
 
@@ -123,11 +134,51 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         break;
       }
 
+      case 'UNLOCK_WALLET': {
+        const { encryptedVault, password } = payload as DecryptPayload;
+        const secret = await decryptSecret(encryptedVault, password);
+        activeSessionSecret = secret;
+        
+        if (sessionTimer) clearTimeout(sessionTimer);
+        sessionTimer = setTimeout(clearSession, SESSION_DURATION_MS);
+        
+        result = { success: true };
+        break;
+      }
+
+      case 'LOCK_WALLET': {
+        clearSession();
+        result = { success: true };
+        break;
+      }
+
+      case 'GET_PRIVATE_KEY': {
+        const { encryptedVault, password } = payload as DecryptPayload;
+        
+        let secretToExtract = activeSessionSecret;
+        if (!secretToExtract) {
+          if (!password) throw new Error("Password required to view private key");
+          secretToExtract = await decryptSecret(encryptedVault, password);
+        }
+        
+        const wallet = secretToExtract.includes(' ') 
+          ? Wallet.fromPhrase(secretToExtract) 
+          : new Wallet(secretToExtract);
+          
+        result = { privateKey: wallet.privateKey };
+        secretToExtract = ''; // Clear temporary variable
+        break;
+      }
+
       case 'SIGN_TRANSACTION': {
         const { encryptedVault, password, unsignedTx } = payload as SignTxPayload;
         
-        // 1. Decrypt the secret
-        const secret = await decryptSecret(encryptedVault, password);
+        // 1. Use the active session, or fallback to the provided password
+        let secret = activeSessionSecret;
+        if (!secret) {
+          if (!password) throw new Error("Wallet is locked. Session expired.");
+          secret = await decryptSecret(encryptedVault, password);
+        }
         
         // 2. Instantiate the isolated Wallet
         const wallet = secret.includes(' ') 
@@ -138,6 +189,9 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         const signedTx = await wallet.signTransaction(unsignedTx);
         
         result = { signedTx };
+        
+        // Proactively clear memory if we aren't using a cached session
+        if (!activeSessionSecret) secret = ''; 
         break;
       }
 
